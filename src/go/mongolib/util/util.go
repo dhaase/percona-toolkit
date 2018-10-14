@@ -12,7 +12,11 @@ import (
 	"gopkg.in/mgo.v2/bson"
 )
 
-func GetReplicasetMembers(dialer pmgo.Dialer, di *mgo.DialInfo) ([]proto.Members, error) {
+var (
+	CANNOT_GET_QUERY_ERROR = errors.New("cannot get query field from the profile document (it is not a map)")
+)
+
+func GetReplicasetMembers(dialer pmgo.Dialer, di *pmgo.DialInfo) ([]proto.Members, error) {
 	hostnames, err := GetHostnames(dialer, di)
 	if err != nil {
 		return nil, err
@@ -75,7 +79,7 @@ func GetReplicasetMembers(dialer pmgo.Dialer, di *mgo.DialInfo) ([]proto.Members
 	return members, nil
 }
 
-func GetHostnames(dialer pmgo.Dialer, di *mgo.DialInfo) ([]string, error) {
+func GetHostnames(dialer pmgo.Dialer, di *pmgo.DialInfo) ([]string, error) {
 	hostnames := []string{di.Addrs[0]}
 	di.Direct = true
 	di.Timeout = 2 * time.Second
@@ -182,7 +186,7 @@ func buildHostsListFromShardMap(shardsMap proto.ShardsMap) []string {
 
 // This function is like GetHostnames but it uses listShards instead of getShardMap
 // so it won't include config servers in the returned list
-func GetShardedHosts(dialer pmgo.Dialer, di *mgo.DialInfo) ([]string, error) {
+func GetShardedHosts(dialer pmgo.Dialer, di *pmgo.DialInfo) ([]string, error) {
 	hostnames := []string{di.Addrs[0]}
 	session, err := dialer.DialWithInfo(di)
 	if err != nil {
@@ -206,7 +210,7 @@ func GetShardedHosts(dialer pmgo.Dialer, di *mgo.DialInfo) ([]string, error) {
 	return hostnames, nil
 }
 
-func getTmpDI(di *mgo.DialInfo, hostname string) *mgo.DialInfo {
+func getTmpDI(di *pmgo.DialInfo, hostname string) *pmgo.DialInfo {
 	tmpdi := *di
 	tmpdi.Addrs = []string{hostname}
 	tmpdi.Direct = true
@@ -215,7 +219,7 @@ func getTmpDI(di *mgo.DialInfo, hostname string) *mgo.DialInfo {
 	return &tmpdi
 }
 
-func GetServerStatus(dialer pmgo.Dialer, di *mgo.DialInfo, hostname string) (proto.ServerStatus, error) {
+func GetServerStatus(dialer pmgo.Dialer, di *pmgo.DialInfo, hostname string) (proto.ServerStatus, error) {
 	ss := proto.ServerStatus{}
 
 	tmpdi := getTmpDI(di, hostname)
@@ -231,4 +235,73 @@ func GetServerStatus(dialer pmgo.Dialer, di *mgo.DialInfo, hostname string) (pro
 	}
 
 	return ss, nil
+}
+
+func GetQueryField(doc proto.SystemProfile) (bson.M, error) {
+	// Proper way to detect if protocol used is "op_msg" or "op_command"
+	// would be to look at "doc.Protocol" field,
+	// however MongoDB 3.0 doesn't have that field
+	// so we need to detect protocol by looking at actual data.
+	query := doc.Query
+	if doc.Command.Len() > 0 {
+		query = doc.Command
+		if doc.Op == "update" || doc.Op == "remove" {
+			if squery, ok := query.Map()["q"]; ok {
+				// just an extra check to ensure this type assertion won't fail
+				if ssquery, ok := squery.(bson.M); ok {
+					return ssquery, nil
+				}
+				return nil, CANNOT_GET_QUERY_ERROR
+			}
+		}
+	}
+
+	// "query" in MongoDB 3.0 can look like this:
+	// {
+	//  	"op" : "query",
+	//  	"ns" : "test.coll",
+	//  	"query" : {
+	//  		"a" : 1
+	//  	},
+	// 		...
+	// }
+	//
+	// but also it can have "query" subkey like this:
+	// {
+	//  	"op" : "query",
+	//  	"ns" : "test.coll",
+	//  	"query" : {
+	//  		"query" : {
+	//  			"$and" : [
+	//  			]
+	//  		},
+	//  		"orderby" : {
+	//  			"k" : -1
+	//  		}
+	//  	},
+	// 		...
+	// }
+	//
+	if squery, ok := query.Map()["query"]; ok {
+		// just an extra check to ensure this type assertion won't fail
+		if ssquery, ok := squery.(bson.M); ok {
+			return ssquery, nil
+		}
+		return nil, CANNOT_GET_QUERY_ERROR
+	}
+
+	// "query" in MongoDB 3.2+ is better structured and always has a "filter" subkey:
+	if squery, ok := query.Map()["filter"]; ok {
+		if ssquery, ok := squery.(bson.M); ok {
+			return ssquery, nil
+		}
+		return nil, CANNOT_GET_QUERY_ERROR
+	}
+
+	// {"ns":"test.system.js","op":"query","query":{"find":"system.js"}}
+	if len(query) == 1 && query[0].Name == "find" {
+		return bson.M{}, nil
+	}
+
+	return query.Map(), nil
 }

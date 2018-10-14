@@ -45,7 +45,7 @@ elsif ( !@{$master_dbh->selectall_arrayref("show databases like 'sakila'")} ) {
 # so we need to specify --set-vars innodb_lock_wait_timeout=3 else the tool will die.
 my $master_dsn = 'h=127.1,P=12345,u=msandbox,p=msandbox';
 my $slave2_dsn = 'h=127.1,P=12347,u=msandbox,p=msandbox';
-my @args       = ($master_dsn, qw(--set-vars innodb_lock_wait_timeout=3));
+my @args       = ($master_dsn, qw(--set-vars innodb_lock_wait_timeout=3 --ignore-tables load_data));
 my $row;
 my $output;
 my $exit_status;
@@ -59,7 +59,6 @@ sub reset_repl_db {
    $master_dbh->do("use $repl_db");
 }
 
-
 # ############################################################################
 # Default checksum and results.  The tool does not technically require any
 # options on well-configured systems (which the test env cannot be).  With
@@ -69,11 +68,12 @@ sub reset_repl_db {
 # in throttle.t.
 # ############################################################################
 
+# 1
 ok(
    no_diff(
       sub { pt_table_checksum::main(@args) },
       "$sample/default-results-$sandbox_version.txt",
-      post_pipe => 'awk \'{print $2 " " $3 " " $4 " " $6 " " $8}\'',
+      post_pipe => 'awk \'{print $2 " " $3 " " $4 " " $7 " " $9}\'',
    ),
    "Default checksum"
 );
@@ -82,32 +82,34 @@ ok(
 # large that all tables will be done in a single chunk without an index.
 # Since this varies by default, there's no use checking the checksums
 # other than to ensure that there's at least one for each table.
+# 2
 $row = $master_dbh->selectrow_arrayref("select count(*) from percona.checksums");
 my $max_chunks = $sandbox_version < '5.7' ? 60 : 100;
+
 ok(
-   $row->[0] > 30 && $row->[0] < $max_chunks,
-   'Between 30 and 60 chunks'
+   $row->[0] > 25 && $row->[0] < $max_chunks,
+   'Between 25 and 60 chunks'
 ) or diag($row->[0]);
 
 # ############################################################################
 # Static chunk size (disable --chunk-time)
 # ############################################################################
-
+# 3
 ok(
    no_diff(
-      sub { pt_table_checksum::main(@args, qw(--chunk-time 0)) },
+      sub { pt_table_checksum::main(@args, qw(--chunk-time 0 --ignore-databases mysql)) },
       "$sample/static-chunk-size-results-$sandbox_version.txt",
-      post_pipe => 'awk \'{print $2 " " $3 " " $4 " " $5 " " $6 " " $8}\'',
+      post_pipe => 'awk \'{print $2 " " $3 " " $4 " " $6 " " $7 " " $9}\'',
    ),
    "Static chunk size (--chunk-time 0)"
 );
 
 $row = $master_dbh->selectrow_arrayref("select count(*) from percona.checksums");
 
-my $max_rows = $sandbox_version < '5.7' ? 90 : 100;
+my $max_rows = $sandbox_version >= '8.0' ? 102 : $sandbox_version < '5.7' ? 90 : 100;
 ok(
-   $row->[0] >= 85 && $row->[0] <= $max_rows,
-   'Between 85 and 90 chunks on master'
+   $row->[0] >= 75 && $row->[0] <= $max_rows,
+   'Between 75 and 90 chunks on master'
 ) or diag($row->[0]);
 
 
@@ -128,13 +130,13 @@ $row = $slave1_dbh->selectrow_arrayref("select city, last_update from sakila.cit
 $slave1_dbh->do("update sakila.city set city='test' where city_id=1");
 
 $exit_status = pt_table_checksum::main(@args,
-   qw(--quiet --quiet -t sakila.city));
+   qw(--quiet -t sakila.city --chunk-size 1));
 
 is(
    $exit_status,
    16,  # = TABLE_DIFF but nothing else; https://bugs.launchpad.net/percona-toolkit/+bug/944051
    "--replicate-check on by default, detects diff"
-);
+) or diag("exit status: $exit_status");
 
 $exit_status = pt_table_checksum::main(@args,
    qw(--quiet --quiet -t sakila.city --no-replicate-check));
@@ -195,6 +197,7 @@ $exit_status = pt_table_checksum::main(@args,
 $slave1_dbh->do("update percona.checksums set this_crc='' where db='sakila' and tbl='city' and (chunk=1 or chunk=6)");
 PerconaTest::wait_for_table($slave2_dbh, "percona.checksums", "db='sakila' and tbl='city' and (chunk=1 or chunk=6) and thic_crc=''");
 
+# 9
 ok(
    no_diff(
       sub { pt_table_checksum::main(@args, qw(--replicate-check-only)) },
@@ -213,6 +216,7 @@ $output = output(
    stderr => 1,
 );
 
+# 10
 like(
    $output,
    qr/infinite loop detected/,
@@ -222,13 +226,14 @@ like(
 # ############################################################################
 # Oversize chunk.
 # ############################################################################
+# 11
 ok(
    no_diff(
       sub { pt_table_checksum::main(@args,
          qw(-t osc.t2 --chunk-size 8 --explain --explain)) },
       "$sample/oversize-chunks.txt",
    ),
-   "Upper boundary same as next lower boundary"
+   "Upper boundary same as next lower boundary",
 );
 
 $output = output(

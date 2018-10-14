@@ -1,12 +1,14 @@
 Changelog
 CONTRIBUTE.md
+CONTRIBUTING.md
 COPYING
-glide.lock
-glide.yaml
+docker-compose.yml
+Gopkg.lock
+Gopkg.toml
 INSTALL
 Makefile.PL
 MANIFEST
-README
+README.md
 bin/pt-align
 bin/pt-archiver
 bin/pt-config-diff
@@ -39,6 +41,4 @@ bin/pt-table-usage
 bin/pt-upgrade
 bin/pt-variable-advisor
 bin/pt-visual-explain
-bin/pt-mongodb-query-digest
-bin/pt-mongodb-summary
 docs/percona-toolkit.pod

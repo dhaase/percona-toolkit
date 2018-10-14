@@ -87,7 +87,8 @@ sub before_execute {
          PTDEBUG && _d($sql);
          $dbh->do($sql);
 
-         $sql = "SET storage_engine=MyISAM";
+         # Deprecated since MySQL 5.7
+         #$sql = "SET storage_engine=MyISAM";
          PTDEBUG && _d($sql);
          $dbh->do($sql);
       };
@@ -531,12 +532,12 @@ sub diff_rows {
 
    $left_dbh->do("DROP TABLE IF EXISTS $left_tbl");
    $left_dbh->do("CREATE TABLE $left_tbl $table_ddl");
-   $left_dbh->do("LOAD DATA LOCAL INFILE '$left_outfile' "
+   $left_dbh->do("LOAD DATA INFILE '$left_outfile' "
       . "INTO TABLE $left_tbl");
 
    $right_dbh->do("DROP TABLE IF EXISTS $right_tbl");
    $right_dbh->do("CREATE TABLE $right_tbl $table_ddl");
-   $right_dbh->do("LOAD DATA LOCAL INFILE '$right_outfile' "
+   $right_dbh->do("LOAD DATA INFILE '$right_outfile' "
       . "INTO TABLE $right_tbl");
 
    PTDEBUG && _d('Loaded', $left_outfile, 'into table', $left_tbl, 'and',
